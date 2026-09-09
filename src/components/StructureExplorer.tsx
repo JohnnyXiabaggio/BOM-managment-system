@@ -18,6 +18,19 @@ import Dialog from './Dialog'
 type TabKey = 'props' | 'where' | 'files' | 'history'
 type ColKey = 'uom' | 'mb' | 'cost' | 'eff' | 'owner'
 type ViewKey = 'design' | 'planned' | 'built'
+type NavKey = 'home' | 'worklist' | 'structure' | 'changes' | 'search' | 'documents' | 'manufacturing' | 'reports'
+
+const NAV_ITEMS: { key: NavKey; label: string }[] = [
+  { key: 'home', label: 'Home' },
+  { key: 'worklist', label: 'My Worklist' },
+  { key: 'structure', label: 'Structure' },
+  { key: 'changes', label: 'Changes' },
+  { key: 'search', label: 'Search' },
+  { key: 'documents', label: 'Documents' },
+  { key: 'manufacturing', label: 'Manufacturing' },
+  { key: 'reports', label: 'Reports' },
+]
+const NAV_LABEL: Record<NavKey, string> = Object.fromEntries(NAV_ITEMS.map((n) => [n.key, n.label])) as Record<NavKey, string>
 
 const OPTIONAL_COLS: { key: ColKey; label: string }[] = [
   { key: 'uom', label: 'UOM' },
@@ -108,6 +121,8 @@ function filterVisibility(needle: string): { visible: Set<string>; forceOpen: Se
 }
 
 export default function StructureExplorer() {
+  const [activeNav, setActiveNav] = useState<NavKey>('structure')
+  const [navSearch, setNavSearch] = useState('')
   const [open, setOpen] = useState<Record<string, boolean>>({ root: true, hvb: true, cma: true })
   const [sel, setSel] = useState('hvb')
   const [root, setRoot] = useState('hvb')
@@ -149,6 +164,12 @@ export default function StructureExplorer() {
     setSel(id)
     setRoot(hasKids ? id : ITEMS[id].parent || id)
     if (hasKids) setOpen((prev) => ({ ...prev, [id]: true }))
+  }
+
+  /** Loads an item and switches back to the Structure tab, for links from other nav pages. */
+  const goToStructure = (id: string) => {
+    pick(id)
+    setActiveNav('structure')
   }
 
   const expandToDepth = (n: number) => {
@@ -343,15 +364,14 @@ export default function StructureExplorer() {
   }
 
   const searchResults = useMemo(() => searchItems(search), [search])
+  const navSearchResults = useMemo(() => searchItems(navSearch, 50), [navSearch])
   const onPickSearch = (id: string) => {
     pick(id)
     setSearch('')
   }
 
-  const pendingPreview = useMemo(
-    () => savedQueryIds('pending').slice(0, 4).map((id) => ITEMS[id]),
-    [],
-  )
+  const pendingAll = useMemo(() => savedQueryIds('pending').map((id) => ITEMS[id]), [])
+  const pendingPreview = pendingAll.slice(0, 4)
   const worklistCount = pendingPreview.length + changeRequests.length
 
   const submitCr = () => {
@@ -535,16 +555,20 @@ export default function StructureExplorer() {
 
       {/* Nav */}
       <div style={{ display: 'flex', background: 'var(--color-accent-900)', borderBottom: '1px solid var(--color-divider)' }}>
-        <span className="plm-nav">Home</span>
-        <span className="plm-nav">My Worklist</span>
-        <span className="plm-nav on">Structure</span>
-        <span className="plm-nav">Changes</span>
-        <span className="plm-nav">Search</span>
-        <span className="plm-nav">Documents</span>
-        <span className="plm-nav">Manufacturing</span>
-        <span className="plm-nav">Reports</span>
+        {NAV_ITEMS.map((n) => (
+          <span
+            key={n.key}
+            className={`plm-nav${activeNav === n.key ? ' on' : ''}`}
+            style={{ cursor: 'pointer' }}
+            onClick={() => setActiveNav(n.key)}
+          >
+            {n.label}
+          </span>
+        ))}
       </div>
 
+      {activeNav === 'structure' && (
+      <>
       {/* Breadcrumb / toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, height: 40, padding: '0 14px', borderBottom: '1px solid var(--color-divider)', background: 'var(--color-neutral-100)' }}>
         <span style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -962,6 +986,80 @@ export default function StructureExplorer() {
           </div>
         </div>
       </div>
+      </>
+      )}
+
+      {activeNav === 'worklist' && (
+        <div style={{ padding: 24, maxWidth: 720 }}>
+          <div className="plm-hd" style={{ marginBottom: 10 }}>Pending review ({pendingAll.length})</div>
+          <div className="plm" style={{ border: '1px solid var(--color-divider)', marginBottom: 24 }}>
+            {pendingAll.map((it) => (
+              <div key={it.id} className="plm-prop" style={{ gridTemplateColumns: '110px 1fr auto', cursor: 'pointer' }} onClick={() => goToStructure(it.id)}>
+                <span className="plm-mono">{it.pn}</span>
+                <span>{it.name}</span>
+                <StateBadge state={it.state} label={STATE_LABEL[it.state]} />
+              </div>
+            ))}
+            {pendingAll.length === 0 && <div className="plm-menu-empty">Nothing pending review.</div>}
+          </div>
+          <div className="plm-hd" style={{ marginBottom: 10 }}>My change requests ({changeRequests.length})</div>
+          <div className="plm" style={{ border: '1px solid var(--color-divider)' }}>
+            {changeRequests.map((cr) => (
+              <div key={cr.id} className="plm-prop" style={{ gridTemplateColumns: '90px 1fr auto' }}>
+                <span className="plm-mono">{cr.id}</span>
+                <span>
+                  {cr.title}
+                  <span className="plm-mut"> · {cr.part} · submitted {cr.submittedAt}</span>
+                </span>
+                <span className="plm-mut">{cr.priority}</span>
+              </div>
+            ))}
+            {changeRequests.length === 0 && (
+              <div className="plm-menu-empty">
+                None submitted yet — select a part in Structure and use "New Change Request".
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeNav === 'search' && (
+        <div style={{ padding: 24, maxWidth: 720 }}>
+          <input
+            className="input"
+            autoFocus
+            style={{ height: 36, fontSize: 14, marginBottom: 14 }}
+            placeholder="Search by part number or name"
+            value={navSearch}
+            onChange={(e) => setNavSearch(e.target.value)}
+          />
+          <div className="plm" style={{ border: '1px solid var(--color-divider)' }}>
+            {navSearch.trim() === '' && <div className="plm-menu-empty">Start typing to search the VP2 product structure.</div>}
+            {navSearch.trim() !== '' && navSearchResults.length === 0 && (
+              <div className="plm-menu-empty">No matches for "{navSearch}"</div>
+            )}
+            {navSearchResults.map((it) => (
+              <div key={it.id} className="plm-prop" style={{ gridTemplateColumns: '110px 1fr auto', cursor: 'pointer' }} onClick={() => goToStructure(it.id)}>
+                <span className="plm-mono">{it.pn}</span>
+                <span>{it.name}</span>
+                <StateBadge state={it.state} label={STATE_LABEL[it.state]} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(activeNav === 'home' || activeNav === 'changes' || activeNav === 'documents' || activeNav === 'manufacturing' || activeNav === 'reports') && (
+        <div style={{ padding: 48, textAlign: 'center' }}>
+          <div className="plm-hd" style={{ marginBottom: 8 }}>{NAV_LABEL[activeNav]}</div>
+          <div className="plm-mut" style={{ fontSize: 13 }}>
+            {NAV_LABEL[activeNav]} isn't built out in this demo — try{' '}
+            <span style={{ color: 'var(--color-accent-700)', cursor: 'pointer' }} onClick={() => setActiveNav('structure')}>Structure</span>
+            {' '}or{' '}
+            <span style={{ color: 'var(--color-accent-700)', cursor: 'pointer' }} onClick={() => setActiveNav('worklist')}>My Worklist</span>.
+          </div>
+        </div>
+      )}
 
       {compareOpen && (
         <Dialog
