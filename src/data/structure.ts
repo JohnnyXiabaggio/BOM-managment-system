@@ -108,3 +108,41 @@ export function rollupMass(id: string): number {
   walk(id, 1)
   return m
 }
+
+const ALL_IDS = Object.keys(ITEMS)
+
+export function searchItems(query: string, limit = 8): StructureItem[] {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return []
+  return ALL_IDS.map((id) => ITEMS[id])
+    .filter((it) => it.pn.toLowerCase().includes(needle) || it.name.toLowerCase().includes(needle))
+    .slice(0, limit)
+}
+
+/** Threshold for the "Mass over target" saved query, in kg per unit mass. */
+export const MASS_TARGET_KG = 5
+
+export type SavedQueryKey = 'pending' | 'mass' | 'supplier'
+
+export const SAVED_QUERIES: { key: SavedQueryKey; label: string }[] = [
+  { key: 'pending', label: 'Parts pending release' },
+  { key: 'mass', label: 'Mass over target' },
+  { key: 'supplier', label: 'Supplier-owned, VP2' },
+]
+
+export function savedQueryIds(key: SavedQueryKey): string[] {
+  const items = ALL_IDS.map((id) => ITEMS[id]).filter((it) => it.parent !== null)
+  switch (key) {
+    case 'pending':
+      return items.filter((it) => it.state === 'wip' || it.state === 'rev').map((it) => it.id)
+    case 'mass':
+      return items.filter((it) => it.mass > MASS_TARGET_KG).map((it) => it.id)
+    case 'supplier':
+      return items.filter((it) => it.mb === 'Buy').map((it) => it.id)
+  }
+}
+
+export function isEffectiveAsOf(item: StructureItem, date: string): boolean {
+  if (item.eff === '—') return false
+  return item.eff <= date
+}
