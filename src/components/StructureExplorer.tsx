@@ -1,4 +1,4 @@
-import { useMemo, useState, type MouseEvent } from 'react'
+import { useEffect, useMemo, useState, type MouseEvent } from 'react'
 import {
   ITEMS,
   STATE_LABEL,
@@ -12,8 +12,11 @@ import {
   type LifecycleState,
   type SavedQueryKey,
 } from '../data/structure'
+import { api, type ActivityEntry, type ChangeRequest, type HistoryEntry } from '../data/api'
 import Popover from './Popover'
 import Dialog from './Dialog'
+
+const CURRENT_USER = 'M. Reyes'
 
 type TabKey = 'props' | 'where' | 'files' | 'history'
 type ColKey = 'uom' | 'mb' | 'cost' | 'eff' | 'owner'
@@ -75,17 +78,14 @@ interface BomRow {
   open: boolean
 }
 
-interface ChangeRequest {
-  id: string
-  title: string
-  description: string
-  part: string
-  priority: string
-  submittedAt: string
-}
-
 function StateBadge({ state, label }: { state: LifecycleState; label: string }) {
   return <span className={`plm-st ${state}`}>{label}</span>
+}
+
+function CrStatusBadge({ status }: { status: ChangeRequest['status'] }) {
+  const cls = status === 'approved' ? 'rel' : status === 'rejected' ? 'obs' : 'rev'
+  const label = status === 'approved' ? 'Approved' : status === 'rejected' ? 'Rejected' : 'Submitted'
+  return <StateBadge state={cls} label={label} />
 }
 
 function csvEscape(v: string): string {
@@ -136,7 +136,14 @@ export default function StructureExplorer() {
   const [compareOpen, setCompareOpen] = useState(false)
   const [crOpen, setCrOpen] = useState(false)
   const [crDraft, setCrDraft] = useState({ title: '', description: '', priority: 'Normal' })
+  const [crSubmitting, setCrSubmitting] = useState(false)
+  const [crError, setCrError] = useState('')
   const [changeRequests, setChangeRequests] = useState<ChangeRequest[]>([])
+  const [decidingId, setDecidingId] = useState<number | null>(null)
+  const [historyRows, setHistoryRows] = useState<HistoryEntry[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [activity, setActivity] = useState<ActivityEntry[]>([])
+  const [activityLoading, setActivityLoading] = useState(false)
 
   // table toolbar controls
   const [query, setQuery] = useState<SavedQueryKey | null>(null)
@@ -149,6 +156,63 @@ export default function StructureExplorer() {
   })
   const [stateFilter, setStateFilter] = useState<Set<LifecycleState>>(new Set(ALL_STATES))
   const [mbFilter, setMbFilter] = useState<Set<'Make' | 'Buy'>>(new Set(ALL_MB))
+
+  const refreshChangeRequests = () => api.changeRequests().then(setChangeRequests).catch(() => {})
+
+  useEffect(() => {
+    refreshChangeRequests()
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    setHistoryLoading(true)
+    api
+      .itemHistory(sel)
+      .then((rows) => {
+        if (!cancelled) setHistoryRows(rows)
+      })
+      .catch(() => {
+        if (!cancelled) setHistoryRows([])
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [sel])
+
+  useEffect(() => {
+    if (activeNav !== 'changes') return
+    let cancelled = false
+    setActivityLoading(true)
+    api
+      .activity()
+      .then((rows) => {
+        if (!cancelled) setActivity(rows)
+      })
+      .catch(() => {
+        if (!cancelled) setActivity([])
+      })
+      .finally(() => {
+        if (!cancelled) setActivityLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeNav])
+
+  const decideCr = async (id: number, status: 'approved' | 'rejected') => {
+    setDecidingId(id)
+    try {
+      await api.decideChangeRequest(id, status, CURRENT_USER)
+      await refreshChangeRequests()
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setDecidingId(null)
+    }
+  }
 
   const toggle = (id: string) => {
     setOpen((prev) => {
@@ -308,7 +372,8 @@ export default function StructureExplorer() {
   const crumbs = chainOf(root)
   const parent = selItem.parent ? ITEMS[selItem.parent] : null
   const selHasKids = kidsOf(sel).length > 0
-  const nextRev = String.fromCharCode(selItem.rev.charCodeAt(1) + 1)
+
+  const openCrForSel = changeRequests.find((cr) => cr.itemId === sel && cr.status === 'submitted')
 
   const propGroups = [
     {
@@ -324,7 +389,7 @@ export default function StructureExplorer() {
       title: 'Lifecycle',
       rows: [
         { k: 'Revision', v: `${selItem.rev} · ${STATE_LABEL[selItem.state]}` },
-        { k: 'Next revision', v: `/${nextRev} · in work (ECO-4471)` },
+        { k: 'Open change request', v: openCrForSel ? `${openCrForSel.ecoNumber} · submitted ${openCrForSel.submittedAt.slice(0, 10)}` : 'None' },
         { k: 'Effectivity', v: selItem.eff === '—' ? 'not effective' : `${selItem.eff} → open` },
         { k: 'Owner', v: selItem.owner },
       ],
@@ -348,12 +413,6 @@ export default function StructureExplorer() {
     { ext: 'DRW', name: `${base}_sheet1.pdf`, size: '2.1 MB' },
     { ext: 'XLS', name: `${selItem.pn}_mass_rollup.xlsx`, size: '318 KB' },
   ]
-  const history = [
-    { when: '2026-08-24', what: `Revision ${selItem.rev} released`, who: selItem.owner },
-    { when: '2026-08-11', what: 'Change ECO-4471 attached', who: 'Change board' },
-    { when: '2026-07-30', what: 'Structure line quantities revised', who: selItem.owner },
-    { when: '2026-07-02', what: 'Item created from template', who: 'M. Reyes' },
-  ]
   const whereUsed = parent
     ? [{ pn: parent.pn, rev: parent.rev, name: parent.name, qty: `${selItem.qty} ${selItem.uom}`, find: selItem.find }]
     : []
@@ -372,24 +431,29 @@ export default function StructureExplorer() {
 
   const pendingAll = useMemo(() => savedQueryIds('pending').map((id) => ITEMS[id]), [])
   const pendingPreview = pendingAll.slice(0, 4)
-  const worklistCount = pendingPreview.length + changeRequests.length
+  const openChangeRequests = changeRequests.filter((cr) => cr.status === 'submitted')
+  const worklistCount = pendingPreview.length + openChangeRequests.length
 
-  const submitCr = () => {
+  const submitCr = async () => {
     if (!crDraft.title.trim()) return
-    const id = `ECO-${4471 + changeRequests.length + 1}`
-    setChangeRequests((prev) => [
-      ...prev,
-      {
-        id,
+    setCrSubmitting(true)
+    setCrError('')
+    try {
+      await api.submitChangeRequest({
+        itemId: sel,
         title: crDraft.title.trim(),
         description: crDraft.description.trim(),
-        part: `${selItem.pn} ${selItem.rev}`,
         priority: crDraft.priority,
-        submittedAt: '2026-09-09',
-      },
-    ])
-    setCrDraft({ title: '', description: '', priority: 'Normal' })
-    setCrOpen(false)
+        submittedBy: CURRENT_USER,
+      })
+      await refreshChangeRequests()
+      setCrDraft({ title: '', description: '', priority: 'Normal' })
+      setCrOpen(false)
+    } catch (err) {
+      setCrError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCrSubmitting(false)
+    }
   }
 
   const exportCsv = () => {
@@ -539,12 +603,20 @@ export default function StructureExplorer() {
               <div className="plm-menu-sep" />
               <div className="plm-menu-title">My change requests</div>
               {changeRequests.length === 0 && <div className="plm-menu-empty">None submitted yet.</div>}
-              {changeRequests.map((cr) => (
-                <div key={cr.id} className="plm-menu-item" style={{ cursor: 'default' }}>
-                  <span className="plm-mono">{cr.id}</span>
+              {changeRequests.slice(0, 5).map((cr) => (
+                <div
+                  key={cr.id}
+                  className="plm-menu-item"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => {
+                    pick(cr.itemId)
+                    close()
+                  }}
+                >
+                  <span className="plm-mono">{cr.ecoNumber}</span>
                   <span>{cr.title}</span>
-                  <span className="plm-mut" style={{ marginLeft: 'auto', fontSize: 10.5 }}>
-                    {cr.priority}
+                  <span style={{ marginLeft: 'auto' }}>
+                    <CrStatusBadge status={cr.status} />
                   </span>
                 </div>
               ))}
@@ -641,7 +713,10 @@ export default function StructureExplorer() {
           <button
             className="btn btn-primary blueprint"
             style={{ height: 28, fontSize: 12, padding: '0 12px' }}
-            onClick={() => setCrOpen(true)}
+            onClick={() => {
+              setCrError('')
+              setCrOpen(true)
+            }}
           >
             <i className="corner tl" /><i className="corner tr" /><i className="corner bl" /><i className="corner br" />
             New Change Request
@@ -969,7 +1044,9 @@ export default function StructureExplorer() {
               <div className="plm-hd" style={{ padding: '9px 12px 4px' }}>
                 Revision history
               </div>
-              {history.map((h, i) => (
+              {historyLoading && <div className="plm-menu-empty">Loading…</div>}
+              {!historyLoading && historyRows.length === 0 && <div className="plm-menu-empty">No recorded history.</div>}
+              {historyRows.map((h, i) => (
                 <div className="plm-prop" style={{ gridTemplateColumns: '74px 1fr' }} key={i}>
                   <span className="plm-mono plm-mut">{h.when}</span>
                   <span>
@@ -1002,16 +1079,48 @@ export default function StructureExplorer() {
             ))}
             {pendingAll.length === 0 && <div className="plm-menu-empty">Nothing pending review.</div>}
           </div>
-          <div className="plm-hd" style={{ marginBottom: 10 }}>My change requests ({changeRequests.length})</div>
+          <div className="plm-hd" style={{ marginBottom: 10 }}>Change requests ({changeRequests.length})</div>
           <div className="plm" style={{ border: '1px solid var(--color-divider)' }}>
             {changeRequests.map((cr) => (
-              <div key={cr.id} className="plm-prop" style={{ gridTemplateColumns: '90px 1fr auto' }}>
-                <span className="plm-mono">{cr.id}</span>
+              <div key={cr.id} className="plm-prop" style={{ gridTemplateColumns: '90px 1fr auto', alignItems: 'center' }}>
+                <span
+                  className="plm-mono"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => goToStructure(cr.itemId)}
+                  title="Open this part in Structure"
+                >
+                  {cr.ecoNumber}
+                </span>
                 <span>
                   {cr.title}
-                  <span className="plm-mut"> · {cr.part} · submitted {cr.submittedAt}</span>
+                  <span className="plm-mut">
+                    {' '}
+                    · {cr.partPn} {cr.partName} · {cr.priority} · submitted by {cr.submittedBy} on {cr.submittedAt.slice(0, 10)}
+                    {cr.status !== 'submitted' && ` · ${cr.status} by ${cr.decidedBy} on ${cr.decidedAt?.slice(0, 10)}`}
+                  </span>
                 </span>
-                <span className="plm-mut">{cr.priority}</span>
+                {cr.status === 'submitted' ? (
+                  <span style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      className="btn btn-secondary"
+                      style={{ height: 24, fontSize: 11, padding: '0 8px' }}
+                      disabled={decidingId === cr.id}
+                      onClick={() => decideCr(cr.id, 'rejected')}
+                    >
+                      Reject
+                    </button>
+                    <button
+                      className="btn btn-primary"
+                      style={{ height: 24, fontSize: 11, padding: '0 8px' }}
+                      disabled={decidingId === cr.id}
+                      onClick={() => decideCr(cr.id, 'approved')}
+                    >
+                      Approve
+                    </button>
+                  </span>
+                ) : (
+                  <CrStatusBadge status={cr.status} />
+                )}
               </div>
             ))}
             {changeRequests.length === 0 && (
@@ -1049,7 +1158,51 @@ export default function StructureExplorer() {
         </div>
       )}
 
-      {(activeNav === 'home' || activeNav === 'changes' || activeNav === 'documents' || activeNav === 'manufacturing' || activeNav === 'reports') && (
+      {activeNav === 'changes' && (
+        <div style={{ padding: 24, maxWidth: 820 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10 }}>
+            <div className="plm-hd">Activity ({activity.length})</div>
+            <span
+              className="plm-chip"
+              style={{ cursor: 'pointer' }}
+              onClick={() => {
+                setActivityLoading(true)
+                api
+                  .activity()
+                  .then(setActivity)
+                  .catch(() => setActivity([]))
+                  .finally(() => setActivityLoading(false))
+              }}
+            >
+              Refresh
+            </span>
+          </div>
+          <div className="plm" style={{ border: '1px solid var(--color-divider)' }}>
+            {activityLoading && <div className="plm-menu-empty">Loading…</div>}
+            {!activityLoading && activity.length === 0 && (
+              <div className="plm-menu-empty">
+                No activity yet — submit a change request from Structure to see the workflow logged here.
+              </div>
+            )}
+            {activity.map((a) => (
+              <div key={a.id} className="plm-prop" style={{ gridTemplateColumns: '150px 1fr', cursor: a.itemId ? 'pointer' : 'default' }} onClick={() => a.itemId && goToStructure(a.itemId)}>
+                <span className="plm-mono plm-mut">{a.happenedAt}</span>
+                <span>
+                  <b style={{ fontWeight: 500 }}>{a.actor}</b> — {a.detail}
+                  {a.partPn && (
+                    <span className="plm-mut">
+                      {' '}
+                      ({a.partPn} {a.partName})
+                    </span>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(activeNav === 'home' || activeNav === 'documents' || activeNav === 'manufacturing' || activeNav === 'reports') && (
         <div style={{ padding: 48, textAlign: 'center' }}>
           <div className="plm-hd" style={{ marginBottom: 8 }}>{NAV_LABEL[activeNav]}</div>
           <div className="plm-mut" style={{ fontSize: 13 }}>
@@ -1074,23 +1227,29 @@ export default function StructureExplorer() {
           <div className="plm-mut" style={{ fontSize: 11.5 }}>
             {selItem.pn} · {selItem.name}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <div className="blueprint" style={{ padding: '10px 12px' }}>
-              <i className="corner tl" /><i className="corner tr" /><i className="corner bl" /><i className="corner br" />
-              <div className="plm-hd" style={{ marginBottom: 6 }}>Current</div>
-              <div className="plm-mono" style={{ fontSize: 15, marginBottom: 4 }}>{selItem.rev}</div>
-              <StateBadge state={selItem.state} label={STATE_LABEL[selItem.state]} />
-              <div style={{ marginTop: 8, fontSize: 11.5 }}>{history[0].what}</div>
-              <div className="plm-mut" style={{ fontSize: 10.5 }}>{history[0].when} · {history[0].who}</div>
+          {historyRows.length < 2 ? (
+            <div className="plm-mut" style={{ fontSize: 12 }}>
+              Not enough recorded history on this item to compare revisions.
             </div>
-            <div className="blueprint" style={{ padding: '10px 12px' }}>
-              <i className="corner tl" /><i className="corner tr" /><i className="corner bl" /><i className="corner br" />
-              <div className="plm-hd" style={{ marginBottom: 6 }}>Previous logged change</div>
-              <div className="plm-mono" style={{ fontSize: 15, marginBottom: 4 }}>{selItem.rev}</div>
-              <div style={{ marginTop: 8, fontSize: 11.5 }}>{history[1].what}</div>
-              <div className="plm-mut" style={{ fontSize: 10.5 }}>{history[1].when} · {history[1].who}</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div className="blueprint" style={{ padding: '10px 12px' }}>
+                <i className="corner tl" /><i className="corner tr" /><i className="corner bl" /><i className="corner br" />
+                <div className="plm-hd" style={{ marginBottom: 6 }}>Current</div>
+                <div className="plm-mono" style={{ fontSize: 15, marginBottom: 4 }}>{selItem.rev}</div>
+                <StateBadge state={selItem.state} label={STATE_LABEL[selItem.state]} />
+                <div style={{ marginTop: 8, fontSize: 11.5 }}>{historyRows[0].what}</div>
+                <div className="plm-mut" style={{ fontSize: 10.5 }}>{historyRows[0].when} · {historyRows[0].who}</div>
+              </div>
+              <div className="blueprint" style={{ padding: '10px 12px' }}>
+                <i className="corner tl" /><i className="corner tr" /><i className="corner bl" /><i className="corner br" />
+                <div className="plm-hd" style={{ marginBottom: 6 }}>Previous logged change</div>
+                <div className="plm-mono" style={{ fontSize: 15, marginBottom: 4 }}>{selItem.rev}</div>
+                <div style={{ marginTop: 8, fontSize: 11.5 }}>{historyRows[1].what}</div>
+                <div className="plm-mut" style={{ fontSize: 10.5 }}>{historyRows[1].when} · {historyRows[1].who}</div>
+              </div>
             </div>
-          </div>
+          )}
           <div className="plm-mut" style={{ fontSize: 10.5 }}>
             Field-level diffing between full revisions isn't available in this demo dataset.
           </div>
@@ -1103,15 +1262,20 @@ export default function StructureExplorer() {
           onClose={() => setCrOpen(false)}
           actions={
             <>
-              <button className="btn btn-secondary" onClick={() => setCrOpen(false)}>
+              <button className="btn btn-secondary" onClick={() => setCrOpen(false)} disabled={crSubmitting}>
                 Cancel
               </button>
-              <button className="btn btn-primary" onClick={submitCr} disabled={!crDraft.title.trim()}>
-                Submit
+              <button className="btn btn-primary" onClick={submitCr} disabled={!crDraft.title.trim() || crSubmitting}>
+                {crSubmitting ? 'Submitting…' : 'Submit'}
               </button>
             </>
           }
         >
+          {crError && (
+            <div className="plm-mut" style={{ fontSize: 11.5, color: 'var(--color-accent-800)' }}>
+              {crError}
+            </div>
+          )}
           <div className="field">
             <label>Affected part</label>
             <div className="plm-mono" style={{ fontSize: 13 }}>
