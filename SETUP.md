@@ -68,6 +68,23 @@ npm run server   # API on http://localhost:4000
 npm run dev      # frontend on http://localhost:5173, proxies /api to the API
 ```
 
+## Demonstration script
+
+With the API running (`npm run server`), you can see the whole workflow
+run end to end from the command line, without clicking through the UI:
+
+```bash
+npm run demo
+```
+
+This picks a part, submits a change request against it, shows it appear
+as pending in the Worklist, approves it, confirms a second decision on
+the same request is refused (409), and prints the resulting activity
+log — all real reads/writes against MySQL. Re-run `npm run db:seed`
+first if you want a clean starting state, then `npm run demo` to
+generate a fresh example, then open the app to see the same change
+request and activity trail live in **My Worklist** and **Changes**.
+
 ## What's backed by MySQL
 
 - **Product structure** (`items` table) — the whole VP2 tree the app
