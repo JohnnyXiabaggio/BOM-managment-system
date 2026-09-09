@@ -1,4 +1,4 @@
-// Thin client for the PLM demo API (server/index.js), backed by MySQL.
+// Thin client for the PLM demo API (server/index.js), backed by SQLite.
 
 export type CrStatus = 'submitted' | 'approved' | 'rejected'
 

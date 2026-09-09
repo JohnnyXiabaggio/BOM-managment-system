@@ -1,7 +1,7 @@
 import express from 'express'
 import cors from 'cors'
 import 'dotenv/config'
-import { pool } from './db.js'
+import { db } from './db.js'
 
 const app = express()
 app.use(cors())
@@ -57,27 +57,32 @@ const activityRowToJson = (row) => ({
   detail: row.detail,
 })
 
-// Wraps an async route handler so a rejected promise reaches Express's
-// error handler instead of crashing the process.
-const h = (fn) => (req, res, next) => fn(req, res, next).catch(next)
+// Wraps a route handler so a thrown error reaches Express's error handler
+// instead of crashing the process.
+const h = (fn) => (req, res, next) => {
+  try {
+    fn(req, res, next)
+  } catch (err) {
+    next(err)
+  }
+}
 
 app.get('/api/health', (req, res) => res.json({ ok: true }))
 
 app.get(
   '/api/items',
-  h(async (req, res) => {
-    const [rows] = await pool.query('SELECT * FROM items ORDER BY id')
+  h((req, res) => {
+    const rows = db.prepare('SELECT * FROM items ORDER BY id').all()
     res.json(rows.map(itemRowToJson))
   }),
 )
 
 app.get(
   '/api/items/:id/history',
-  h(async (req, res) => {
-    const [rows] = await pool.query(
-      'SELECT * FROM revision_history WHERE item_id = ? ORDER BY happened_on DESC, id DESC',
-      [req.params.id],
-    )
+  h((req, res) => {
+    const rows = db
+      .prepare('SELECT * FROM revision_history WHERE item_id = ? ORDER BY happened_on DESC, id DESC')
+      .all(req.params.id)
     res.json(rows.map((r) => ({ when: r.happened_on, what: r.what, who: r.who })))
   }),
 )
@@ -90,91 +95,91 @@ const CR_SELECT = `
 
 app.get(
   '/api/change-requests',
-  h(async (req, res) => {
-    const [rows] = await pool.query(`${CR_SELECT} ORDER BY cr.submitted_at DESC, cr.id DESC`)
+  h((req, res) => {
+    const rows = db.prepare(`${CR_SELECT} ORDER BY cr.submitted_at DESC, cr.id DESC`).all()
     res.json(rows.map(crRowToJson))
   }),
 )
 
 app.post(
   '/api/change-requests',
-  h(async (req, res) => {
+  h((req, res) => {
     const { itemId, title, description, priority, submittedBy } = req.body || {}
     if (!itemId || !title || !String(title).trim()) {
       return res.status(400).json({ error: 'itemId and title are required' })
     }
-    const [[item]] = await pool.query('SELECT id FROM items WHERE id = ?', [itemId])
+    const item = db.prepare('SELECT id FROM items WHERE id = ?').get(itemId)
     if (!item) return res.status(404).json({ error: `Unknown item "${itemId}"` })
 
-    const [[{ n }]] = await pool.query('SELECT COUNT(*) AS n FROM change_requests')
+    const { n } = db.prepare('SELECT COUNT(*) AS n FROM change_requests').get()
     const ecoNumber = `ECO-${4471 + n + 1}`
     const by = submittedBy || 'M. Reyes'
 
-    const [result] = await pool.query(
-      `INSERT INTO change_requests
+    const insertCr = db.prepare(`
+      INSERT INTO change_requests
         (eco_number, title, description, item_id, priority, status, submitted_by, submitted_at)
-       VALUES (?, ?, ?, ?, ?, 'submitted', ?, NOW())`,
-      [ecoNumber, String(title).trim(), description || null, itemId, priority || 'Normal', by],
-    )
-    await pool.query(
-      `INSERT INTO activity_log (actor, action, item_id, change_request_id, detail)
-       VALUES (?, 'cr_submitted', ?, ?, ?)`,
-      [by, itemId, result.insertId, `Submitted ${ecoNumber} — ${String(title).trim()}`],
-    )
+      VALUES (?, ?, ?, ?, ?, 'submitted', ?, strftime('%Y-%m-%d %H:%M:%S', 'now'))
+    `)
+    const insertActivity = db.prepare(`
+      INSERT INTO activity_log (actor, action, item_id, change_request_id, detail)
+      VALUES (?, 'cr_submitted', ?, ?, ?)
+    `)
 
-    const [[row]] = await pool.query(`${CR_SELECT} WHERE cr.id = ?`, [result.insertId])
+    const result = db.transaction(() => {
+      const info = insertCr.run(ecoNumber, String(title).trim(), description || null, itemId, priority || 'Normal', by)
+      insertActivity.run(by, itemId, info.lastInsertRowid, `Submitted ${ecoNumber} — ${String(title).trim()}`)
+      return info.lastInsertRowid
+    })()
+
+    const row = db.prepare(`${CR_SELECT} WHERE cr.id = ?`).get(result)
     res.status(201).json(crRowToJson(row))
   }),
 )
 
 app.patch(
   '/api/change-requests/:id',
-  h(async (req, res) => {
+  h((req, res) => {
     const { status, decidedBy } = req.body || {}
     if (!['approved', 'rejected'].includes(status)) {
       return res.status(400).json({ error: 'status must be "approved" or "rejected"' })
     }
-    const [[existing]] = await pool.query(`${CR_SELECT} WHERE cr.id = ?`, [req.params.id])
+    const existing = db.prepare(`${CR_SELECT} WHERE cr.id = ?`).get(req.params.id)
     if (!existing) return res.status(404).json({ error: 'Change request not found' })
     if (existing.status !== 'submitted') {
       return res.status(409).json({ error: `Change request is already ${existing.status}` })
     }
 
     const by = decidedBy || 'M. Reyes'
-    await pool.query(
-      'UPDATE change_requests SET status = ?, decided_by = ?, decided_at = NOW() WHERE id = ?',
-      [status, by, req.params.id],
-    )
-    await pool.query(
-      `INSERT INTO activity_log (actor, action, item_id, change_request_id, detail)
-       VALUES (?, ?, ?, ?, ?)`,
-      [
-        by,
-        status === 'approved' ? 'cr_approved' : 'cr_rejected',
-        existing.item_id,
-        existing.id,
-        `${status === 'approved' ? 'Approved' : 'Rejected'} ${existing.eco_number} — ${existing.title}`,
-      ],
-    )
+    const detail = `${status === 'approved' ? 'Approved' : 'Rejected'} ${existing.eco_number} — ${existing.title}`
 
-    const [[row]] = await pool.query(`${CR_SELECT} WHERE cr.id = ?`, [req.params.id])
+    db.transaction(() => {
+      db.prepare(
+        "UPDATE change_requests SET status = ?, decided_by = ?, decided_at = strftime('%Y-%m-%d %H:%M:%S', 'now') WHERE id = ?",
+      ).run(status, by, req.params.id)
+      db.prepare(
+        'INSERT INTO activity_log (actor, action, item_id, change_request_id, detail) VALUES (?, ?, ?, ?, ?)',
+      ).run(by, status === 'approved' ? 'cr_approved' : 'cr_rejected', existing.item_id, existing.id, detail)
+    })()
+
+    const row = db.prepare(`${CR_SELECT} WHERE cr.id = ?`).get(req.params.id)
     res.json(crRowToJson(row))
   }),
 )
 
 app.get(
   '/api/activity',
-  h(async (req, res) => {
+  h((req, res) => {
     const limit = Math.min(Number(req.query.limit) || 100, 500)
-    const [rows] = await pool.query(
-      `SELECT a.*, i.part_number, i.name, cr.eco_number
-       FROM activity_log a
-       LEFT JOIN items i ON i.id = a.item_id
-       LEFT JOIN change_requests cr ON cr.id = a.change_request_id
-       ORDER BY a.happened_at DESC, a.id DESC
-       LIMIT ?`,
-      [limit],
-    )
+    const rows = db
+      .prepare(
+        `SELECT a.*, i.part_number, i.name, cr.eco_number
+         FROM activity_log a
+         LEFT JOIN items i ON i.id = a.item_id
+         LEFT JOIN change_requests cr ON cr.id = a.change_request_id
+         ORDER BY a.happened_at DESC, a.id DESC
+         LIMIT ?`,
+      )
+      .all(limit)
     res.json(rows.map(activityRowToJson))
   }),
 )

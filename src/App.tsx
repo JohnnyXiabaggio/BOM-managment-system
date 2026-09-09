@@ -34,7 +34,7 @@ export default function App() {
           </div>
           <div style={{ fontSize: 13, opacity: 0.75, marginBottom: 4 }}>{error}</div>
           <div style={{ fontSize: 12.5, opacity: 0.6 }}>
-            Is the backend running? See SETUP.md — <code>npm run server</code> (and MySQL must be up and seeded).
+            Is the backend running? See SETUP.md — <code>npm run server</code> (and the database must be migrated/seeded).
           </div>
         </div>
       </div>

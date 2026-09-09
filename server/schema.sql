@@ -1,67 +1,63 @@
--- PLM demo schema — VP2 product structure, change requests, and an
--- activity log so the app's workflow (submit -> review -> approve/reject)
--- is fully backed by MySQL instead of in-memory state.
+-- PLM demo schema (SQLite) — VP2 product structure, change requests, and
+-- an activity log so the app's workflow (submit -> review -> approve/
+-- reject) is fully backed by a real database instead of in-memory state.
+-- No server to install or configure: this is a single file on disk.
 
 CREATE TABLE IF NOT EXISTS items (
-  id              VARCHAR(20)  NOT NULL PRIMARY KEY,
-  parent_id       VARCHAR(20)  NULL,
-  find_no         VARCHAR(10)  NOT NULL DEFAULT '',
-  part_number     VARCHAR(20)  NOT NULL,
-  revision        VARCHAR(5)   NOT NULL,
-  name            VARCHAR(120) NOT NULL,
-  kind            ENUM('asm','part') NOT NULL,
-  qty             DECIMAL(10,3) NOT NULL,
-  uom             VARCHAR(10)  NOT NULL,
-  make_buy        ENUM('Make','Buy') NOT NULL,
-  mass_kg         DECIMAL(10,3) NOT NULL,
-  unit_cost       DECIMAL(10,2) NOT NULL DEFAULT 0,
-  lifecycle_state ENUM('rel','wip','rev','obs') NOT NULL,
-  effective_date  DATE NULL,
-  owner           VARCHAR(80)  NOT NULL,
-  classification  VARCHAR(120) NOT NULL,
-  plant           VARCHAR(80)  NOT NULL,
-  supplier        VARCHAR(120) NOT NULL,
-  CONSTRAINT fk_items_parent FOREIGN KEY (parent_id) REFERENCES items(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  id              TEXT PRIMARY KEY,
+  parent_id       TEXT NULL REFERENCES items(id),
+  find_no         TEXT NOT NULL DEFAULT '',
+  part_number     TEXT NOT NULL,
+  revision        TEXT NOT NULL,
+  name            TEXT NOT NULL,
+  kind            TEXT NOT NULL CHECK (kind IN ('asm','part')),
+  qty             REAL NOT NULL,
+  uom             TEXT NOT NULL,
+  make_buy        TEXT NOT NULL CHECK (make_buy IN ('Make','Buy')),
+  mass_kg         REAL NOT NULL,
+  unit_cost       REAL NOT NULL DEFAULT 0,
+  lifecycle_state TEXT NOT NULL CHECK (lifecycle_state IN ('rel','wip','rev','obs')),
+  effective_date  TEXT NULL,
+  owner           TEXT NOT NULL,
+  classification  TEXT NOT NULL,
+  plant           TEXT NOT NULL,
+  supplier        TEXT NOT NULL
+);
 
-CREATE INDEX idx_items_parent ON items(parent_id);
+CREATE INDEX IF NOT EXISTS idx_items_parent ON items(parent_id);
 
 CREATE TABLE IF NOT EXISTS revision_history (
-  id          INT AUTO_INCREMENT PRIMARY KEY,
-  item_id     VARCHAR(20) NOT NULL,
-  happened_on DATE NOT NULL,
-  what        VARCHAR(200) NOT NULL,
-  who         VARCHAR(80) NOT NULL,
-  CONSTRAINT fk_history_item FOREIGN KEY (item_id) REFERENCES items(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id     TEXT NOT NULL REFERENCES items(id),
+  happened_on TEXT NOT NULL,
+  what        TEXT NOT NULL,
+  who         TEXT NOT NULL
+);
 
-CREATE INDEX idx_history_item ON revision_history(item_id, happened_on);
+CREATE INDEX IF NOT EXISTS idx_history_item ON revision_history(item_id, happened_on);
 
 CREATE TABLE IF NOT EXISTS change_requests (
-  id           INT AUTO_INCREMENT PRIMARY KEY,
-  eco_number   VARCHAR(20)  NOT NULL UNIQUE,
-  title        VARCHAR(200) NOT NULL,
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  eco_number   TEXT NOT NULL UNIQUE,
+  title        TEXT NOT NULL,
   description  TEXT NULL,
-  item_id      VARCHAR(20)  NOT NULL,
-  priority     ENUM('Low','Normal','High','Urgent') NOT NULL DEFAULT 'Normal',
-  status       ENUM('submitted','approved','rejected') NOT NULL DEFAULT 'submitted',
-  submitted_by VARCHAR(80)  NOT NULL,
-  submitted_at DATETIME     NOT NULL,
-  decided_by   VARCHAR(80)  NULL,
-  decided_at   DATETIME     NULL,
-  CONSTRAINT fk_cr_item FOREIGN KEY (item_id) REFERENCES items(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  item_id      TEXT NOT NULL REFERENCES items(id),
+  priority     TEXT NOT NULL DEFAULT 'Normal' CHECK (priority IN ('Low','Normal','High','Urgent')),
+  status       TEXT NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted','approved','rejected')),
+  submitted_by TEXT NOT NULL,
+  submitted_at TEXT NOT NULL,
+  decided_by   TEXT NULL,
+  decided_at   TEXT NULL
+);
 
 CREATE TABLE IF NOT EXISTS activity_log (
-  id                INT AUTO_INCREMENT PRIMARY KEY,
-  happened_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  actor             VARCHAR(80) NOT NULL,
-  action            VARCHAR(40) NOT NULL,
-  item_id           VARCHAR(20) NULL,
-  change_request_id INT NULL,
-  detail            VARCHAR(300) NOT NULL,
-  CONSTRAINT fk_activity_item FOREIGN KEY (item_id) REFERENCES items(id),
-  CONSTRAINT fk_activity_cr FOREIGN KEY (change_request_id) REFERENCES change_requests(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  happened_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now')),
+  actor             TEXT NOT NULL,
+  action            TEXT NOT NULL,
+  item_id           TEXT NULL REFERENCES items(id),
+  change_request_id INTEGER NULL REFERENCES change_requests(id),
+  detail            TEXT NOT NULL
+);
 
-CREATE INDEX idx_activity_time ON activity_log(happened_at);
+CREATE INDEX IF NOT EXISTS idx_activity_time ON activity_log(happened_at);

@@ -1,5 +1,5 @@
 // VP2 (D-Segment BEV) as-designed product structure. The dataset itself
-// now lives in MySQL (see server/) — this module fetches it once at
+// now lives in SQLite (see server/) — this module fetches it once at
 // startup and exposes the same tree-walking helpers the UI relies on.
 
 export type LifecycleState = 'rel' | 'wip' | 'rev' | 'obs'
