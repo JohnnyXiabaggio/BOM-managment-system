@@ -6,11 +6,13 @@ import {
   chainOf,
   isEffectiveAsOf,
   kidsOf,
+  loadStructureData,
   rollupMass,
   savedQueryIds,
   searchItems,
   type LifecycleState,
   type SavedQueryKey,
+  type StructureItem,
 } from '../data/structure'
 import { api, type ActivityEntry, type ChangeRequest, type HistoryEntry } from '../data/api'
 import Popover from './Popover'
@@ -77,6 +79,67 @@ interface BomRow {
   hasKids: boolean
   open: boolean
 }
+
+/** Every editable item attribute, held as form strings and coerced on submit. */
+interface ItemDraft {
+  find: string
+  pn: string
+  rev: string
+  name: string
+  kind: 'asm' | 'part'
+  qty: string
+  uom: string
+  mb: 'Make' | 'Buy'
+  mass: string
+  cost: string
+  state: LifecycleState
+  eff: string
+  owner: string
+  cls: string
+  plant: string
+  supplier: string
+}
+
+/** The draft fields that are plain free-text; the rest are fixed-choice selects. */
+type DraftTextKey = Exclude<keyof ItemDraft, 'kind' | 'mb' | 'state'>
+
+const blankDraft = (owner: string): ItemDraft => ({
+  find: '',
+  pn: '',
+  rev: '/A',
+  name: '',
+  kind: 'part',
+  qty: '1',
+  uom: 'EA',
+  mb: 'Make',
+  mass: '0',
+  cost: '0',
+  state: 'wip',
+  eff: '',
+  owner,
+  cls: '',
+  plant: '',
+  supplier: '—',
+})
+
+const draftOf = (it: StructureItem): ItemDraft => ({
+  find: it.find,
+  pn: it.pn,
+  rev: it.rev,
+  name: it.name,
+  kind: it.kind,
+  qty: String(it.qty),
+  uom: it.uom,
+  mb: it.mb,
+  mass: String(it.mass),
+  cost: String(it.cost),
+  state: it.state,
+  eff: it.eff === '—' ? '' : it.eff,
+  owner: it.owner,
+  cls: it.cls,
+  plant: it.plant,
+  supplier: it.supplier,
+})
 
 function StateBadge({ state, label }: { state: LifecycleState; label: string }) {
   return <span className={`plm-st ${state}`}>{label}</span>
@@ -145,6 +208,27 @@ export default function StructureExplorer() {
   const [activity, setActivity] = useState<ActivityEntry[]>([])
   const [activityLoading, setActivityLoading] = useState(false)
 
+  // BOM item management. One dialog is open at a time, so a single
+  // busy/error pair serves create, modify, revise and delete.
+  const [dataVersion, setDataVersion] = useState(0)
+  const [itemDialog, setItemDialog] = useState<{ mode: 'create'; parent: string } | { mode: 'edit' } | null>(null)
+  const [itemDraft, setItemDraft] = useState<ItemDraft>(() => blankDraft(CURRENT_USER))
+  const [reviseDraft, setReviseDraft] = useState({ note: '', revision: '' })
+  const [reviseOpen, setReviseOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [itemBusy, setItemBusy] = useState(false)
+  const [itemError, setItemError] = useState('')
+  const [banner, setBanner] = useState('')
+
+  // SQL-backed search page
+  const [navSearchFilters, setNavSearchFilters] = useState<{ state: Set<LifecycleState>; mb: Set<'Make' | 'Buy'> }>({
+    state: new Set(ALL_STATES),
+    mb: new Set(ALL_MB),
+  })
+  const [navSearchRows, setNavSearchRows] = useState<StructureItem[]>([])
+  const [navSearchBusy, setNavSearchBusy] = useState(false)
+  const [navSearchError, setNavSearchError] = useState('')
+
   // table toolbar controls
   const [query, setQuery] = useState<SavedQueryKey | null>(null)
   const [visibleCols, setVisibleCols] = useState<Record<ColKey, boolean>>({
@@ -180,7 +264,7 @@ export default function StructureExplorer() {
     return () => {
       cancelled = true
     }
-  }, [sel])
+  }, [sel, dataVersion])
 
   useEffect(() => {
     if (activeNav !== 'changes') return
@@ -201,6 +285,52 @@ export default function StructureExplorer() {
       cancelled = true
     }
   }, [activeNav])
+
+  useEffect(() => {
+    if (!banner) return
+    const t = setTimeout(() => setBanner(''), 5000)
+    return () => clearTimeout(t)
+  }, [banner])
+
+  // Search page queries the items table directly, so it reflects the
+  // database rather than the copy of the tree held in the browser.
+  useEffect(() => {
+    if (activeNav !== 'search') return
+    const q = navSearch.trim()
+    if (!q) {
+      setNavSearchRows([])
+      setNavSearchError('')
+      return
+    }
+    let cancelled = false
+    setNavSearchBusy(true)
+    const t = setTimeout(() => {
+      api
+        .searchItems({
+          q,
+          state: [...navSearchFilters.state],
+          mb: [...navSearchFilters.mb],
+          limit: 100,
+        })
+        .then((rows) => {
+          if (cancelled) return
+          setNavSearchRows(rows)
+          setNavSearchError('')
+        })
+        .catch((err) => {
+          if (cancelled) return
+          setNavSearchRows([])
+          setNavSearchError(err instanceof Error ? err.message : String(err))
+        })
+        .finally(() => {
+          if (!cancelled) setNavSearchBusy(false)
+        })
+    }, 200)
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+  }, [activeNav, navSearch, navSearchFilters, dataVersion])
 
   const decideCr = async (id: number, status: 'approved' | 'rejected') => {
     setDecidingId(id)
@@ -280,7 +410,7 @@ export default function StructureExplorer() {
   const filtersActive = stateFilter.size < ALL_STATES.length || mbFilter.size < ALL_MB.length
 
   const needle = treeFilter.trim().toLowerCase()
-  const filtered = useMemo(() => (needle ? filterVisibility(needle) : null), [needle])
+  const filtered = useMemo(() => (needle ? filterVisibility(needle) : null), [needle, dataVersion])
 
   const treeRows = useMemo<TreeRow[]>(() => {
     const rows: TreeRow[] = []
@@ -303,7 +433,7 @@ export default function StructureExplorer() {
     }
     walk('root', 0)
     return rows
-  }, [open, sel, filtered])
+  }, [open, sel, filtered, dataVersion])
 
   const bomRows = useMemo<BomRow[]>(() => {
     let list: BomRow[]
@@ -365,13 +495,149 @@ export default function StructureExplorer() {
       list = out
     }
     return list.filter((r) => stateFilter.has(r.state) && mbFilter.has(r.mb))
-  }, [root, open, sel, query, stateFilter, mbFilter])
+  }, [root, open, sel, query, stateFilter, mbFilter, dataVersion])
 
   const selItem = ITEMS[sel]
   const rootItem = ITEMS[root]
   const crumbs = chainOf(root)
   const parent = selItem.parent ? ITEMS[selItem.parent] : null
   const selHasKids = kidsOf(sel).length > 0
+
+  /**
+   * Re-reads the structure after a write. Selection is re-pointed at the
+   * top if the item it referred to is no longer in the database, which can
+   * happen when someone else deletes it.
+   */
+  const reload = async () => {
+    await loadStructureData()
+    setSel((cur) => (ITEMS[cur] ? cur : 'root'))
+    setRoot((cur) => (ITEMS[cur] ? cur : 'root'))
+    setDataVersion((v) => v + 1)
+  }
+
+  /** Coerces the form draft into an API payload, rejecting bad numbers first. */
+  const draftFields = () => {
+    const qty = Number(itemDraft.qty)
+    const mass = Number(itemDraft.mass)
+    const cost = Number(itemDraft.cost)
+    if (!itemDraft.pn.trim()) throw new Error('Part number is required')
+    if (!itemDraft.name.trim()) throw new Error('Name is required')
+    if (![qty, mass, cost].every((n) => Number.isFinite(n) && n >= 0)) {
+      throw new Error('Qty, mass and unit cost must be numbers of 0 or more')
+    }
+    return {
+      find: itemDraft.find.trim(),
+      pn: itemDraft.pn.trim(),
+      name: itemDraft.name.trim(),
+      kind: itemDraft.kind,
+      qty,
+      uom: itemDraft.uom.trim() || 'EA',
+      mb: itemDraft.mb,
+      mass,
+      cost,
+      state: itemDraft.state,
+      eff: itemDraft.eff || '—',
+      owner: itemDraft.owner.trim() || CURRENT_USER,
+      cls: itemDraft.cls.trim(),
+      plant: itemDraft.plant.trim(),
+      supplier: itemDraft.supplier.trim() || '—',
+    }
+  }
+
+  /**
+   * Shared shell for the item writes: runs one, refreshes the tree from the
+   * database, moves the selection to the item named by `select`, and reports
+   * the outcome. Errors stay in the open dialog so they can be corrected.
+   */
+  const runItemWrite = async (fn: () => Promise<{ message: string; select?: string }>) => {
+    setItemBusy(true)
+    setItemError('')
+    try {
+      const { message, select } = await fn()
+      await reload()
+      if (select && ITEMS[select]) {
+        setSel(select)
+        setRoot(kidsOf(select).length ? select : ITEMS[select].parent || select)
+        const ancestors = chainOf(select).slice(0, -1)
+        setOpen((prev) => ({ ...prev, ...Object.fromEntries(ancestors.map((a) => [a.id, true])) }))
+      }
+      setBanner(message)
+      setItemDialog(null)
+      setReviseOpen(false)
+      setDeleteOpen(false)
+    } catch (err) {
+      setItemError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setItemBusy(false)
+    }
+  }
+
+  /** Labelled text input bound to one of the draft's string fields. */
+  const draftInput = (label: string, key: DraftTextKey, opts: { placeholder?: string; type?: string } = {}) => (
+    <div className="field">
+      <label>{label}</label>
+      <input
+        className="input"
+        type={opts.type || 'text'}
+        placeholder={opts.placeholder}
+        value={itemDraft[key]}
+        onChange={(e) => {
+          const value = e.target.value
+          setItemDraft((d) => {
+            const next = { ...d }
+            next[key] = value
+            return next
+          })
+        }}
+      />
+    </div>
+  )
+
+  const openCreate = () => {
+    setItemError('')
+    setItemDraft(blankDraft(CURRENT_USER))
+    setItemDialog({ mode: 'create', parent: selHasKids ? sel : selItem.parent || root })
+  }
+
+  const openEdit = () => {
+    setItemError('')
+    setItemDraft(draftOf(selItem))
+    setItemDialog({ mode: 'edit' })
+  }
+
+  const saveItem = () =>
+    runItemWrite(async () => {
+      const fields = draftFields()
+      if (itemDialog?.mode === 'create') {
+        const parentPn = ITEMS[itemDialog.parent]?.pn ?? itemDialog.parent
+        const created = await api.createItem({
+          parent: itemDialog.parent,
+          rev: itemDraft.rev.trim() || '/A',
+          actor: CURRENT_USER,
+          ...fields,
+        })
+        return { message: `Created ${created.pn} ${created.rev} under ${parentPn}`, select: created.id }
+      }
+      const updated = await api.updateItem(sel, { actor: CURRENT_USER, ...fields })
+      return { message: `Saved changes to ${updated.pn} ${updated.rev}`, select: updated.id }
+    })
+
+  const doRevise = () =>
+    runItemWrite(async () => {
+      const updated = await api.reviseItem(sel, {
+        note: reviseDraft.note.trim() || undefined,
+        revision: reviseDraft.revision.trim() || undefined,
+        actor: CURRENT_USER,
+      })
+      setReviseDraft({ note: '', revision: '' })
+      return { message: `${updated.pn} revised to ${updated.rev} — now In Work`, select: updated.id }
+    })
+
+  const doDelete = () =>
+    runItemWrite(async () => {
+      const gone = await api.deleteItem(sel, CURRENT_USER)
+      return { message: `Deleted ${gone.pn} ${gone.rev} — ${gone.name}`, select: gone.parent || 'root' }
+    })
 
   const openCrForSel = changeRequests.find((cr) => cr.itemId === sel && cr.status === 'submitted')
 
@@ -397,7 +663,7 @@ export default function StructureExplorer() {
     {
       title: 'Manufacturing',
       rows: [
-        { k: 'Make / buy', v: `${selItem.mb} · ${selItem.plant}` },
+        { k: 'Make / buy', v: [selItem.mb, selItem.plant].filter(Boolean).join(' · ') },
         { k: 'Quantity per', v: `${selItem.qty} ${selItem.uom}` },
         { k: 'Unit mass', v: `${selItem.mass.toFixed(2)} kg` },
         { k: 'Rolled-up mass', v: `${rollupMass(sel).toFixed(2)} kg` },
@@ -422,14 +688,13 @@ export default function StructureExplorer() {
     fn()
   }
 
-  const searchResults = useMemo(() => searchItems(search), [search])
-  const navSearchResults = useMemo(() => searchItems(navSearch, 50), [navSearch])
+  const searchResults = useMemo(() => searchItems(search), [search, dataVersion])
   const onPickSearch = (id: string) => {
     pick(id)
     setSearch('')
   }
 
-  const pendingAll = useMemo(() => savedQueryIds('pending').map((id) => ITEMS[id]), [])
+  const pendingAll = useMemo(() => savedQueryIds('pending').map((id) => ITEMS[id]), [dataVersion])
   const pendingPreview = pendingAll.slice(0, 4)
   const openChangeRequests = changeRequests.filter((cr) => cr.status === 'submitted')
   const worklistCount = pendingPreview.length + openChangeRequests.length
@@ -639,6 +904,26 @@ export default function StructureExplorer() {
         ))}
       </div>
 
+      {banner && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '6px 14px',
+            fontSize: 11.5,
+            background: 'var(--color-accent-100)',
+            color: 'var(--color-accent-800)',
+            borderBottom: '1px solid var(--color-divider)',
+          }}
+        >
+          <span>{banner}</span>
+          <span style={{ marginLeft: 'auto', cursor: 'pointer' }} onClick={() => setBanner('')}>
+            ✕
+          </span>
+        </div>
+      )}
+
       {activeNav === 'structure' && (
       <>
       {/* Breadcrumb / toolbar */}
@@ -802,6 +1087,16 @@ export default function StructureExplorer() {
               </span>
             )}
             <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+              <span
+                className="plm-chip"
+                data-testid="new-item"
+                style={{ cursor: 'pointer' }}
+                title={`Add a line under ${selHasKids ? selItem.pn : parent?.pn ?? rootItem.pn}`}
+                onClick={openCreate}
+              >
+                + New item
+              </span>
+
               <Popover
                 trigger={({ toggle }) => (
                   <span className="plm-chip" style={{ cursor: 'pointer' }} onClick={toggle}>
@@ -975,7 +1270,42 @@ export default function StructureExplorer() {
             </div>
             <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 19, marginTop: 2 }}>{selItem.name}</div>
             <div className="plm-mut" style={{ fontSize: 11 }}>
-              {selHasKids ? 'Assembly' : 'Part'} · {selItem.cls}
+              {[selHasKids ? 'Assembly' : 'Part', selItem.cls].filter(Boolean).join(' · ')}
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+              <button
+                className="btn btn-secondary"
+                data-testid="edit-item"
+                style={{ height: 24, fontSize: 11, padding: '0 9px' }}
+                onClick={openEdit}
+              >
+                Edit
+              </button>
+              <button
+                className="btn btn-secondary"
+                data-testid="revise-item"
+                style={{ height: 24, fontSize: 11, padding: '0 9px' }}
+                onClick={() => {
+                  setItemError('')
+                  setReviseDraft({ note: '', revision: '' })
+                  setReviseOpen(true)
+                }}
+              >
+                Revise
+              </button>
+              <button
+                className="btn btn-secondary"
+                data-testid="delete-item"
+                style={{ height: 24, fontSize: 11, padding: '0 9px' }}
+                disabled={!selItem.parent}
+                title={selItem.parent ? undefined : 'The top-level item cannot be deleted'}
+                onClick={() => {
+                  setItemError('')
+                  setDeleteOpen(true)
+                }}
+              >
+                Delete
+              </button>
             </div>
           </div>
 
@@ -1047,8 +1377,9 @@ export default function StructureExplorer() {
               {historyLoading && <div className="plm-menu-empty">Loading…</div>}
               {!historyLoading && historyRows.length === 0 && <div className="plm-menu-empty">No recorded history.</div>}
               {historyRows.map((h, i) => (
-                <div className="plm-prop" style={{ gridTemplateColumns: '74px 1fr' }} key={i}>
+                <div className="plm-prop" style={{ gridTemplateColumns: '74px 30px 1fr' }} key={i}>
                   <span className="plm-mono plm-mut">{h.when}</span>
+                  <span className="plm-mono plm-mut">{h.rev}</span>
                   <span>
                     {h.what}
                     <span className="plm-mut"> · {h.who}</span>
@@ -1133,28 +1464,84 @@ export default function StructureExplorer() {
       )}
 
       {activeNav === 'search' && (
-        <div style={{ padding: 24, maxWidth: 720 }}>
+        <div style={{ padding: 24, maxWidth: 820 }}>
           <input
             className="input"
             autoFocus
-            style={{ height: 36, fontSize: 14, marginBottom: 14 }}
-            placeholder="Search by part number or name"
+            style={{ height: 36, fontSize: 14, marginBottom: 10 }}
+            placeholder="Search part number, name, classification or supplier"
             value={navSearch}
             onChange={(e) => setNavSearch(e.target.value)}
           />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+            {ALL_STATES.map((s) => (
+              <span
+                key={s}
+                className="plm-chip"
+                style={{ cursor: 'pointer', opacity: navSearchFilters.state.has(s) ? 1 : 0.45 }}
+                onClick={() =>
+                  setNavSearchFilters((prev) => {
+                    const state = new Set(prev.state)
+                    if (state.has(s)) state.delete(s)
+                    else state.add(s)
+                    return { ...prev, state }
+                  })
+                }
+              >
+                {STATE_LABEL[s]}
+              </span>
+            ))}
+            <span style={{ width: 1, height: 18, background: 'var(--color-divider)' }} />
+            {ALL_MB.map((m) => (
+              <span
+                key={m}
+                className="plm-chip"
+                style={{ cursor: 'pointer', opacity: navSearchFilters.mb.has(m) ? 1 : 0.45 }}
+                onClick={() =>
+                  setNavSearchFilters((prev) => {
+                    const mb = new Set(prev.mb)
+                    if (mb.has(m)) mb.delete(m)
+                    else mb.add(m)
+                    return { ...prev, mb }
+                  })
+                }
+              >
+                {m}
+              </span>
+            ))}
+            <span className="plm-mut" style={{ fontSize: 10.5, marginLeft: 'auto' }}>
+              Queried with SQL against the items table
+            </span>
+          </div>
           <div className="plm" style={{ border: '1px solid var(--color-divider)' }}>
             {navSearch.trim() === '' && <div className="plm-menu-empty">Start typing to search the VP2 product structure.</div>}
-            {navSearch.trim() !== '' && navSearchResults.length === 0 && (
+            {navSearch.trim() !== '' && navSearchBusy && <div className="plm-menu-empty">Searching…</div>}
+            {navSearchError && <div className="plm-menu-empty">Search failed — {navSearchError}</div>}
+            {navSearch.trim() !== '' && !navSearchBusy && !navSearchError && navSearchRows.length === 0 && (
               <div className="plm-menu-empty">No matches for "{navSearch}"</div>
             )}
-            {navSearchResults.map((it) => (
-              <div key={it.id} className="plm-prop" style={{ gridTemplateColumns: '110px 1fr auto', cursor: 'pointer' }} onClick={() => goToStructure(it.id)}>
-                <span className="plm-mono">{it.pn}</span>
-                <span>{it.name}</span>
-                <StateBadge state={it.state} label={STATE_LABEL[it.state]} />
-              </div>
-            ))}
+            {!navSearchBusy &&
+              !navSearchError &&
+              navSearchRows.map((it) => (
+                <div
+                  key={it.id}
+                  className="plm-prop"
+                  style={{ gridTemplateColumns: '110px 44px 1fr 130px auto', cursor: 'pointer' }}
+                  onClick={() => goToStructure(it.id)}
+                >
+                  <span className="plm-mono">{it.pn}</span>
+                  <span className="plm-mono plm-mut">{it.rev}</span>
+                  <span>{it.name}</span>
+                  <span className="plm-mut">{it.mb === 'Buy' ? it.supplier : it.plant}</span>
+                  <StateBadge state={it.state} label={STATE_LABEL[it.state]} />
+                </div>
+              ))}
           </div>
+          {navSearchRows.length > 0 && !navSearchBusy && (
+            <div className="plm-mut" style={{ fontSize: 10.5, marginTop: 8 }}>
+              {navSearchRows.length} row{navSearchRows.length === 1 ? '' : 's'} returned
+            </div>
+          )}
         </div>
       )}
 
@@ -1244,7 +1631,7 @@ export default function StructureExplorer() {
               <div className="blueprint" style={{ padding: '10px 12px' }}>
                 <i className="corner tl" /><i className="corner tr" /><i className="corner bl" /><i className="corner br" />
                 <div className="plm-hd" style={{ marginBottom: 6 }}>Previous logged change</div>
-                <div className="plm-mono" style={{ fontSize: 15, marginBottom: 4 }}>{selItem.rev}</div>
+                <div className="plm-mono" style={{ fontSize: 15, marginBottom: 4 }}>{historyRows[1].rev || selItem.rev}</div>
                 <div style={{ marginTop: 8, fontSize: 11.5 }}>{historyRows[1].what}</div>
                 <div className="plm-mut" style={{ fontSize: 10.5 }}>{historyRows[1].when} · {historyRows[1].who}</div>
               </div>
@@ -1313,6 +1700,188 @@ export default function StructureExplorer() {
               <option>Urgent</option>
             </select>
           </div>
+        </Dialog>
+      )}
+
+      {itemDialog && (
+        <Dialog
+          title={itemDialog.mode === 'create' ? 'New BOM Item' : `Edit ${selItem.pn}`}
+          onClose={() => setItemDialog(null)}
+          actions={
+            <>
+              <button className="btn btn-secondary" onClick={() => setItemDialog(null)} disabled={itemBusy}>
+                Cancel
+              </button>
+              <button className="btn btn-primary" data-testid="save-item" onClick={saveItem} disabled={itemBusy}>
+                {itemBusy ? 'Saving…' : itemDialog.mode === 'create' ? 'Create item' : 'Save changes'}
+              </button>
+            </>
+          }
+        >
+          {itemError && (
+            <div style={{ fontSize: 11.5, color: 'var(--color-accent-800)' }}>{itemError}</div>
+          )}
+          <div className="field">
+            <label>{itemDialog.mode === 'create' ? 'Parent assembly' : 'Item'}</label>
+            <div className="plm-mono" style={{ fontSize: 13 }}>
+              {itemDialog.mode === 'create'
+                ? `${ITEMS[itemDialog.parent].pn} ${ITEMS[itemDialog.parent].rev} · ${ITEMS[itemDialog.parent].name}`
+                : `${selItem.pn} ${selItem.rev} · ${selItem.name}`}
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            {draftInput('Part number', 'pn', { placeholder: 'ABC-12345' })}
+            {itemDialog.mode === 'create' ? (
+              draftInput('Revision', 'rev', { placeholder: '/A' })
+            ) : (
+              <div className="field">
+                <label>Revision</label>
+                <div className="plm-mono" style={{ fontSize: 13 }}>
+                  {selItem.rev}
+                  <span className="plm-mut" style={{ fontSize: 10.5 }}> · use Revise to change</span>
+                </div>
+              </div>
+            )}
+          </div>
+          {draftInput('Name', 'name', { placeholder: 'Descriptive part name' })}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div className="field">
+              <label>Type</label>
+              <select
+                className="input"
+                value={itemDraft.kind}
+                onChange={(e) => setItemDraft((d) => ({ ...d, kind: e.target.value as 'asm' | 'part' }))}
+              >
+                <option value="part">Part</option>
+                <option value="asm">Assembly</option>
+              </select>
+            </div>
+            {draftInput('Find number', 'find', { placeholder: '110' })}
+            {draftInput('Qty per', 'qty')}
+            {draftInput('UOM', 'uom', { placeholder: 'EA' })}
+            <div className="field">
+              <label>Make / buy</label>
+              <select
+                className="input"
+                value={itemDraft.mb}
+                onChange={(e) => setItemDraft((d) => ({ ...d, mb: e.target.value as 'Make' | 'Buy' }))}
+              >
+                <option value="Make">Make</option>
+                <option value="Buy">Buy</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Lifecycle state</label>
+              <select
+                className="input"
+                value={itemDraft.state}
+                onChange={(e) => setItemDraft((d) => ({ ...d, state: e.target.value as LifecycleState }))}
+              >
+                {ALL_STATES.map((s) => (
+                  <option key={s} value={s}>
+                    {STATE_LABEL[s]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {draftInput('Unit mass (kg)', 'mass')}
+            {draftInput('Unit cost', 'cost')}
+            {draftInput('Effective date', 'eff', { type: 'date' })}
+            {draftInput('Owner', 'owner')}
+          </div>
+          {draftInput('Classification', 'cls', { placeholder: 'PWT / ESS / Module' })}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            {draftInput('Plant', 'plant', { placeholder: 'Plant 2 · Line B' })}
+            {draftInput('Supplier', 'supplier', { placeholder: '—' })}
+          </div>
+          <div className="plm-mut" style={{ fontSize: 10.5 }}>
+            {itemDialog.mode === 'create'
+              ? 'Creates a row in the items table plus a revision-history and activity-log entry.'
+              : 'Saved changes are written to the items table and every changed field is recorded in the activity log.'}
+          </div>
+        </Dialog>
+      )}
+
+      {reviseOpen && (
+        <Dialog
+          title={`Revise ${selItem.pn}`}
+          onClose={() => setReviseOpen(false)}
+          actions={
+            <>
+              <button className="btn btn-secondary" onClick={() => setReviseOpen(false)} disabled={itemBusy}>
+                Cancel
+              </button>
+              <button className="btn btn-primary" data-testid="confirm-revise" onClick={doRevise} disabled={itemBusy}>
+                {itemBusy ? 'Revising…' : 'Revise'}
+              </button>
+            </>
+          }
+        >
+          {itemError && <div style={{ fontSize: 11.5, color: 'var(--color-accent-800)' }}>{itemError}</div>}
+          <div className="field">
+            <label>Current revision</label>
+            <div className="plm-mono" style={{ fontSize: 13 }}>
+              {selItem.rev} · {STATE_LABEL[selItem.state]}
+            </div>
+          </div>
+          <div className="field">
+            <label>New revision</label>
+            <input
+              className="input"
+              value={reviseDraft.revision}
+              placeholder="Next in sequence"
+              onChange={(e) => setReviseDraft((d) => ({ ...d, revision: e.target.value }))}
+            />
+          </div>
+          <div className="field">
+            <label>Reason</label>
+            <textarea
+              className="input"
+              value={reviseDraft.note}
+              placeholder="Why the item is being revised"
+              onChange={(e) => setReviseDraft((d) => ({ ...d, note: e.target.value }))}
+            />
+          </div>
+          <div className="plm-mut" style={{ fontSize: 10.5 }}>
+            The item moves to In Work and loses its effectivity date until it is released again. The revision
+            change is appended to its history.
+          </div>
+        </Dialog>
+      )}
+
+      {deleteOpen && (
+        <Dialog
+          title={`Delete ${selItem.pn}`}
+          onClose={() => setDeleteOpen(false)}
+          actions={
+            <>
+              <button className="btn btn-secondary" onClick={() => setDeleteOpen(false)} disabled={itemBusy}>
+                Cancel
+              </button>
+              <button className="btn btn-primary" data-testid="confirm-delete" onClick={doDelete} disabled={itemBusy}>
+                {itemBusy ? 'Deleting…' : 'Delete item'}
+              </button>
+            </>
+          }
+        >
+          {itemError && <div style={{ fontSize: 11.5, color: 'var(--color-accent-800)' }}>{itemError}</div>}
+          <div className="field">
+            <label>Item</label>
+            <div className="plm-mono" style={{ fontSize: 13 }}>
+              {selItem.pn} {selItem.rev} · {selItem.name}
+            </div>
+          </div>
+          {selHasKids ? (
+            <div style={{ fontSize: 12 }}>
+              This assembly still has {kidsOf(sel).length} child line{kidsOf(sel).length === 1 ? '' : 's'}. Delete
+              those first — the database will refuse to remove a line that others hang from.
+            </div>
+          ) : (
+            <div style={{ fontSize: 12 }}>
+              The item and its revision history are removed from the database, along with any change requests
+              raised against it. The activity log keeps a record of the deletion.
+            </div>
+          )}
         </Dialog>
       )}
     </div>

@@ -36,17 +36,17 @@ const run = async () => {
     }
 
     for (const it of items) {
-      const history = [{ happened_on: '2026-07-02', what: 'Item created from template', who: 'M. Reyes' }]
+      const history = [{ revision: '/A', happened_on: '2026-07-02', what: 'Item created from template', who: 'M. Reyes' }]
       if (it.eff !== '—') {
-        history.push({ happened_on: it.eff, what: `Revision ${it.rev} released`, who: it.owner })
+        history.push({ revision: it.rev, happened_on: it.eff, what: `Revision ${it.rev} released`, who: it.owner })
       }
       if (it.state === 'wip' || it.state === 'rev') {
-        history.push({ happened_on: '2026-08-24', what: 'Structure line quantities revised', who: it.owner })
+        history.push({ revision: it.rev, happened_on: '2026-08-24', what: 'Structure line quantities revised', who: it.owner })
       }
       for (const h of history) {
         await conn.query(
-          'INSERT INTO revision_history (item_id, happened_on, what, who) VALUES (?, ?, ?, ?)',
-          [it.id, h.happened_on, h.what, h.who],
+          'INSERT INTO revision_history (item_id, revision, happened_on, what, who) VALUES (?, ?, ?, ?, ?)',
+          [it.id, h.revision, h.happened_on, h.what, h.who],
         )
       }
     }

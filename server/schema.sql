@@ -29,11 +29,15 @@ CREATE INDEX idx_items_parent ON items(parent_id);
 CREATE TABLE IF NOT EXISTS revision_history (
   id          INT AUTO_INCREMENT PRIMARY KEY,
   item_id     VARCHAR(20) NOT NULL,
+  revision    VARCHAR(5)  NOT NULL DEFAULT '',
   happened_on DATE NOT NULL,
   what        VARCHAR(200) NOT NULL,
   who         VARCHAR(80) NOT NULL,
   CONSTRAINT fk_history_item FOREIGN KEY (item_id) REFERENCES items(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- For databases created before revision_history tracked a revision.
+ALTER TABLE revision_history ADD COLUMN revision VARCHAR(5) NOT NULL DEFAULT '' AFTER item_id;
 
 CREATE INDEX idx_history_item ON revision_history(item_id, happened_on);
 
@@ -65,3 +69,7 @@ CREATE TABLE IF NOT EXISTS activity_log (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE INDEX idx_activity_time ON activity_log(happened_at);
+
+-- Item searches filter on part number / name / classification / supplier.
+CREATE INDEX idx_items_part_number ON items(part_number);
+CREATE INDEX idx_items_name ON items(name);

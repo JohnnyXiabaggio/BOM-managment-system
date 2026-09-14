@@ -28,7 +28,22 @@ export interface StructureItem {
 export let ITEMS: Record<string, StructureItem> = {}
 export let KIDS: Record<string, string[]> = {}
 
-/** Fetches the product structure from the API and builds the lookup maps. Call once at app startup. */
+/** Orders BOM lines by find number the way a structure report would. */
+function byFindNumber(items: Record<string, StructureItem>) {
+  return (a: string, b: string) => {
+    const x = parseFloat(items[a].find)
+    const y = parseFloat(items[b].find)
+    if (Number.isFinite(x) && Number.isFinite(y) && x !== y) return x - y
+    if (Number.isFinite(x) !== Number.isFinite(y)) return Number.isFinite(x) ? -1 : 1
+    return items[a].pn.localeCompare(items[b].pn)
+  }
+}
+
+/**
+ * Fetches the product structure from the API and rebuilds the lookup maps.
+ * Called at startup and again after any create/modify/revise/delete so the
+ * tree reflects what is actually in the database.
+ */
 export async function loadStructureData(): Promise<void> {
   const res = await fetch('/api/items')
   if (!res.ok) throw new Error(`Failed to load items: ${res.status} ${res.statusText}`)
@@ -40,6 +55,7 @@ export async function loadStructureData(): Promise<void> {
     items[it.id] = it
     if (it.parent) (kids[it.parent] = kids[it.parent] || []).push(it.id)
   })
+  Object.values(kids).forEach((list) => list.sort(byFindNumber(items)))
   ITEMS = items
   KIDS = kids
 }

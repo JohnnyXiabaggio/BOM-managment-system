@@ -77,20 +77,63 @@ run end to end from the command line, without clicking through the UI:
 npm run demo
 ```
 
-This picks a part, submits a change request against it, shows it appear
-as pending in the Worklist, approves it, confirms a second decision on
-the same request is refused (409), and prints the resulting activity
-log — all real reads/writes against MySQL. Re-run `npm run db:seed`
-first if you want a clean starting state, then `npm run demo` to
-generate a fresh example, then open the app to see the same change
-request and activity trail live in **My Worklist** and **Changes**.
+It walks the whole BOM lifecycle against the database: search the items
+table, create a new part under an assembly, modify its quantity and cost,
+revise it to the next revision, print its revision history, raise and
+approve a change request, release the revision, prove the structure rules
+are enforced (an assembly with children and the top-level item both refuse
+to be deleted), delete the part again, and print the resulting activity
+log. Every line is a real read or write against MySQL.
+
+The script cleans up after itself, so it can be run repeatedly. Run
+`npm run db:seed` if you want to reset the dataset completely, then open
+the app to see the same change request and activity trail live in
+**My Worklist** and **Changes**.
+
+## Managing the BOM from the UI
+
+Everything the demo script does is available on the **Structure** screen:
+
+- **Create** — select an assembly, then `+ New item` above the structure
+  table. The new line is inserted at its find number under that assembly.
+- **Modify** — `Edit` in the Properties panel. Each changed field is named
+  in the revision history and the activity log.
+- **Revise** — `Revise` in the Properties panel bumps the revision (`/A` →
+  `/B`, or a revision you type), moves the item to *In Work* and clears its
+  effectivity until it is released again.
+- **Delete** — `Delete` in the Properties panel. Assemblies that still have
+  child lines and the top-level item are refused; the activity log keeps a
+  record of what was removed.
+- **Search** — the **Search** tab queries the `items` table directly
+  (part number, name, classification and supplier) and narrows by lifecycle
+  state and make/buy.
+
+## API
+
+| Method   | Path                          | Purpose                                  |
+| -------- | ----------------------------- | ---------------------------------------- |
+| `GET`    | `/api/items`                  | Whole product structure                  |
+| `GET`    | `/api/items/search`           | `q`, `state`, `mb`, `kind`, `limit`      |
+| `POST`   | `/api/items`                  | Create an item under `parent`            |
+| `PATCH`  | `/api/items/:id`              | Modify any editable attribute            |
+| `POST`   | `/api/items/:id/revise`       | Bump to the next (or a given) revision   |
+| `DELETE` | `/api/items/:id`              | Delete a childless item                  |
+| `GET`    | `/api/items/:id/history`      | Revision history for one item            |
+| `GET`    | `/api/change-requests`        | All change requests                      |
+| `POST`   | `/api/change-requests`        | Raise one against an item                |
+| `PATCH`  | `/api/change-requests/:id`    | Approve or reject                        |
+| `GET`    | `/api/activity`               | Activity log, newest first               |
+
+Writes run in a transaction and record both a revision-history entry and an
+activity-log entry, so nothing changes the structure without an audit trail.
 
 ## What's backed by MySQL
 
 - **Product structure** (`items` table) — the whole VP2 tree the app
-  renders; fetched once at startup via `GET /api/items`.
+  renders, and every create / modify / revise / delete performed on it.
 - **Revision history** (`revision_history` table) — shown in the
-  Properties → History tab and the Compare Revisions dialog.
+  Properties → History tab and the Compare Revisions dialog, with the
+  revision each entry was recorded against.
 - **Change requests** (`change_requests` table) — submitting "New Change
   Request" in Structure, and Approve/Reject in My Worklist, are real
   writes (`POST`/`PATCH /api/change-requests`).
