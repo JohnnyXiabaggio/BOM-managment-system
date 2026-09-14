@@ -210,6 +210,13 @@ export default function StructureExplorer() {
 
   // BOM item management. One dialog is open at a time, so a single
   // busy/error pair serves create, modify, revise and delete.
+  //
+  // dataVersion is bumped whenever the module-level ITEMS/KIDS maps in
+  // src/data/structure.ts are rebuilt from the API. Those maps are plain
+  // module bindings rather than state, so react-hooks/exhaustive-deps cannot
+  // see them and reports dataVersion as "unnecessary" in the memos that read
+  // them. It is required: without it those memos would serve stale rows after
+  // a reload. The rule is disabled at each of those call sites.
   const [dataVersion, setDataVersion] = useState(0)
   const [itemDialog, setItemDialog] = useState<{ mode: 'create'; parent: string } | { mode: 'edit' } | null>(null)
   const [itemDraft, setItemDraft] = useState<ItemDraft>(() => blankDraft(CURRENT_USER))
@@ -410,6 +417,7 @@ export default function StructureExplorer() {
   const filtersActive = stateFilter.size < ALL_STATES.length || mbFilter.size < ALL_MB.length
 
   const needle = treeFilter.trim().toLowerCase()
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVersion is the intentional trigger; see note at its declaration.
   const filtered = useMemo(() => (needle ? filterVisibility(needle) : null), [needle, dataVersion])
 
   const treeRows = useMemo<TreeRow[]>(() => {
@@ -433,6 +441,7 @@ export default function StructureExplorer() {
     }
     walk('root', 0)
     return rows
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVersion is the intentional trigger; see note at its declaration.
   }, [open, sel, filtered, dataVersion])
 
   const bomRows = useMemo<BomRow[]>(() => {
@@ -495,6 +504,7 @@ export default function StructureExplorer() {
       list = out
     }
     return list.filter((r) => stateFilter.has(r.state) && mbFilter.has(r.mb))
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVersion is the intentional trigger; see note at its declaration.
   }, [root, open, sel, query, stateFilter, mbFilter, dataVersion])
 
   const selItem = ITEMS[sel]
@@ -688,12 +698,14 @@ export default function StructureExplorer() {
     fn()
   }
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVersion is the intentional trigger; see note at its declaration.
   const searchResults = useMemo(() => searchItems(search), [search, dataVersion])
   const onPickSearch = (id: string) => {
     pick(id)
     setSearch('')
   }
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- dataVersion is the intentional trigger; see note at its declaration.
   const pendingAll = useMemo(() => savedQueryIds('pending').map((id) => ITEMS[id]), [dataVersion])
   const pendingPreview = pendingAll.slice(0, 4)
   const openChangeRequests = changeRequests.filter((cr) => cr.status === 'submitted')
