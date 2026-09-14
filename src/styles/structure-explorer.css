@@ -1,0 +1,53 @@
+/* Structure Explorer (1a — classic three-pane) — ported 1:1 from the
+   Claude Design mockup's embedded <style> block. */
+:root {
+  --plm-row-h: 28px;
+  --plm-font: 12px;
+}
+.corner { visibility: visible; }
+
+.plm { background: var(--color-bg); border: 1px solid var(--color-divider); display: flex; flex-direction: column; font-size: 13px; color: var(--color-text); overflow: hidden; }
+.plm-tbl { width: 100%; border-collapse: collapse; font-size: var(--plm-font); font-variant-numeric: tabular-nums; }
+.plm-tbl th { position: sticky; top: 0; z-index: 1; text-align: left; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; font-weight: 500; color: color-mix(in srgb, var(--color-text) 62%, transparent); background: var(--color-neutral-200); padding: 6px 8px; border-bottom: 1px solid var(--color-divider); white-space: nowrap; }
+.plm-tbl td { padding: 0 8px; height: var(--plm-row-h); border-bottom: 1px solid color-mix(in srgb, var(--color-text) 8%, transparent); white-space: nowrap; }
+.plm-tbl tbody tr { cursor: pointer; }
+.plm-tbl tbody tr:hover { background: color-mix(in srgb, var(--color-accent) 8%, transparent); }
+.plm-tbl tbody tr.sel { background: var(--color-accent-200); }
+.plm-r { text-align: right; }
+.plm-cost { display: table-cell; }
+.plm-mono { font-family: ui-monospace, Menlo, monospace; font-size: 11px; letter-spacing: -.01em; }
+.plm-mut { color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+.plm-hd { font-family: var(--font-heading); font-weight: 600; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 62%, transparent); }
+.plm-tr { display: flex; align-items: center; gap: 6px; height: var(--plm-row-h); padding-right: 8px; font-size: var(--plm-font); cursor: pointer; }
+.plm-tr:hover { background: color-mix(in srgb, var(--color-accent) 8%, transparent); }
+.plm-tr.sel { background: var(--color-accent-200); }
+.plm-cv { width: 12px; flex: none; color: color-mix(in srgb, var(--color-text) 80%, transparent); font-size: 12px; line-height: 1; text-align: center; display: inline-block; }
+.plm-gl { width: 9px; height: 9px; flex: none; border: 1px solid var(--color-accent-700); }
+.plm-gl.leaf { background: var(--color-accent-600); border-color: var(--color-accent-600); }
+.plm-tab { cursor: default; padding: 7px 11px; font-family: var(--font-heading); font-weight: 600; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 60%, transparent); border-bottom: 2px solid transparent; }
+.plm-tab:hover { color: var(--color-accent-700); cursor: pointer; }
+.plm-tab.on { color: var(--color-accent-800); border-bottom-color: var(--color-accent); }
+.plm-nav { padding: 0 12px; font-size: 12.5px; line-height: 34px; color: color-mix(in srgb, var(--color-bg) 72%, transparent); cursor: default; }
+.plm-nav:hover { color: var(--color-bg); }
+.plm-nav.on { color: var(--color-bg); box-shadow: inset 0 -2px 0 var(--color-accent-400); }
+.plm-prop { display: grid; grid-template-columns: 104px 1fr; gap: 8px; padding: 4px 12px; font-size: 11.5px; border-bottom: 1px solid color-mix(in srgb, var(--color-text) 6%, transparent); }
+.plm-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; font-size: 10.5px; border: 1px solid var(--color-divider); color: color-mix(in srgb, var(--color-text) 70%, transparent); }
+.plm-st { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; padding: 1px 7px; letter-spacing: .03em; }
+.plm-st.rel { background: var(--color-accent-700); color: var(--color-bg); }
+.plm-st.wip { border: 1px solid var(--color-accent-600); color: var(--color-accent-800); }
+.plm-st.rev { background: var(--color-accent-200); color: var(--color-accent-800); }
+.plm-st.obs { border: 1px dashed var(--color-neutral-500); color: var(--color-neutral-700); }
+.plm-ind { display: inline-block; border-left: 1px solid color-mix(in srgb, var(--color-text) 18%, transparent); height: var(--plm-row-h); vertical-align: middle; }
+
+.plm-menu { min-width: 200px; background: var(--color-bg); border: 1px solid var(--color-divider); box-shadow: 0 6px 18px color-mix(in srgb, var(--color-neutral-900) 22%, transparent); font-size: 12.5px; color: var(--color-text); }
+.plm-menu-title { font-family: var(--font-heading); font-weight: 600; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 62%, transparent); padding: 8px 10px 4px; }
+.plm-menu-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; cursor: pointer; white-space: nowrap; }
+.plm-menu-item:hover { background: color-mix(in srgb, var(--color-accent) 8%, transparent); }
+.plm-menu-item.on { color: var(--color-accent-800); font-weight: 500; }
+.plm-menu-sep { height: 1px; background: var(--color-divider); margin: 4px 0; }
+.plm-menu-empty { padding: 10px; font-size: 11.5px; color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+
+.plm-search-wrap { position: relative; width: 340px; }
+.plm-search-panel { position: absolute; top: 100%; left: 0; right: 0; margin-top: 4px; background: var(--color-bg); border: 1px solid var(--color-divider); box-shadow: 0 6px 18px color-mix(in srgb, var(--color-neutral-900) 22%, transparent); z-index: 20; color: var(--color-text); max-height: 320px; overflow: auto; }
+.plm-search-row { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; cursor: pointer; font-size: 12px; }
+.plm-search-row:hover { background: color-mix(in srgb, var(--color-accent) 8%, transparent); }
